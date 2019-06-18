@@ -61,7 +61,7 @@ alertmanager:
   ##
   extraEnv: {}
 
-  ## ConfigMap override where fullname is {{.Release.Name}}-{{.Values.alertmanager.configMapOverrideName}}
+  ## ConfigMap override where fullname is {.Release.Name}-{.Values.alertmanager.configMapOverrideName}
   ## Defining configMapOverrideName will cause templates/alertmanager-configmap.yaml
   ## to NOT generate a ConfigMap resource
   ##
@@ -609,7 +609,7 @@ server:
     #   secretName: prom-secret-files
     #   readOnly: true
 
-  ## ConfigMap override where fullname is {{.Release.Name}}-{{.Values.server.configMapOverrideName}}
+  ## ConfigMap override where fullname is {.Release.Name}-{.Values.server.configMapOverrideName}
   ## Defining configMapOverrideName will cause templates/server-configmap.yaml
   ## to NOT generate a ConfigMap resource
   ##
@@ -964,8 +964,8 @@ serverFiles:
   #         labels:
   #           severity: page
   #         annotations:
-  #           description: '{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 5 minutes.'
-  #           summary: 'Instance {{ $labels.instance }} down'
+  #           description: '{ $labels.instance }} of job { $labels.job }} has been down for more than 5 minutes.'
+  #           summary: 'Instance { $labels.instance }} down'
 
   rules: {}
 

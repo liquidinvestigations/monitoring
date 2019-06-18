@@ -5,7 +5,7 @@ import logging
 import subprocess
 import tempfile
 
-from retry import retry
+from retry import retry as _retry
 import click
 import click_log
 import jinja2
@@ -30,16 +30,18 @@ class Config():
         self.DATA_DIR = '/data'
         self.KUBECONFIG = '/data/kubeconfig.yml'
 
-        self.CHARTS = ['sentry', 'grafana', 'telegraf', 'prometheus']
+        self.CHARTS = ['sentry', 'telegraf', 'prometheus', 'grafana']
 
 
 config = Config()
-log.debug('Config loaded')
+
+def retry(exc):
+    return _retry(exc, tries=7, delay=5, backoff=1.3, jitter=(1,3), logger=log)
 
 
 def execve(args):
     args = [str(a) for a in args]
-    log.debug("+ execexec  %s", " ".join(args))
+    log.debug("+ exec  %s", " ".join(args))
     os.execve(args[0], args, os.environ)
 
 
@@ -74,7 +76,7 @@ def k3s_server_args():
         '--log', config.DATA_DIR + '/k3s/server.log',
         '--write-kubeconfig', config.KUBECONFIG,
         '--no-deploy=traefik',
-        #'--node-name', 'monitoring',
+        #'--node-name', 'monitoring',  # this checks with DNS and crashes our server :(
     ]
 
 
@@ -103,47 +105,53 @@ def _helm(*args):
 
 
 def helm_install(name):
-    with open(f'vars/{name}.yaml', 'r') as f:
+    if name in _helm('ls', '--deployed', '-q', name):
+        log.info('Already deployed: %s', name)
+    elif name in _helm('ls', '--all', '-q', name):
+        log.error('Past deployment failure!')
+        return
+
+    with open(f'values/{name}.yaml', 'r') as f:
         template = jinja2.Template(f.read())
     chart = f'stable/{name}'
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml') as values:
         values.write(template.render(config=config))
-        values.close()
+        values.flush()
 
         args = ['install', '--dep-up', '--atomic', '-f', values.name, '-n', name, chart]
-        args_dry_run = args[:2] + ['--dry-run'] + args[2:]
-
-        @retry(subprocess.CalledProcessError, tries=5, delay=2, backoff=2, logger=log)
-        def dry_run():
-            _helm(*args_dry_run)
-
-        dry_run()
-        helm(*args)
+        _helm(*args)
 
 
 def _kubectl(*args):
     return run(kubectl_args() + list(args))
 
 
-@retry(subprocess.CalledProcessError, tries=5, delay=2, backoff=2, logger=log)
+@retry(subprocess.CalledProcessError)
 def wait_for_k3s():
     _kubectl('get', 'node')
 
 
-@cli.command()
+@retry(subprocess.CalledProcessError)
+def wait_for_helm():
+    _helm('install', '--dep-up', '--dry-run', 'stable/sentry')
+
+
 def server_init():
     # setup k3s pvc
+    log.info("Setting up local path storage PVC")
     _kubectl('apply', '-f', 'charts/local-path-storage.yaml')
     _kubectl('patch', 'storageclass', 'local-path', '-p', K3S_LOCAL_STORAGE_PATCH)
     if 'serviceaccount/tiller' not in _kubectl('get', 'serviceaccounts', '-A', '-o', 'name'):
+        log.info("Setting up serviceaccount for tiller")
         _kubectl('create', 'serviceaccount', '--namespace', 'kube-system', 'tiller')
         _kubectl('create', 'clusterrolebinding', 'tiller-cluster-rule',
                  '--clusterrole=cluster-admin', '--serviceaccount=kube-system:tiller')
-    #_kubectl('patch', 'deploy', '--namespace', 'kube-system', 'tiller-deploy',
-    #         '-p', '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}')
 
+    log.info("Installing and upgrading helm")
     _helm('init', '--upgrade', '--history-max', 200, '--service-account', 'tiller')
     _helm('repo', 'update')
+
+    wait_for_helm()
 
     for chart in config.CHARTS:
         helm_install(chart)
@@ -154,14 +162,14 @@ K3S_LOCAL_STORAGE_PATCH = '{"metadata":{"annotations":{"storageclass.kubernetes.
 
 @cli.command()
 def runserver():
-    log.info('Installing config.toml.tmpl')
-
     log.info("Forking")
     if os.fork() == 0:
         execve(k3s_server_args())
 
     # wait until `kubectl get node` works
     wait_for_k3s()
+
+    server_init()
 
     log.info('We are set! Sleeping forever')
     while True:
