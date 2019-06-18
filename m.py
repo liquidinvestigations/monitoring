@@ -5,6 +5,7 @@ import logging
 import subprocess
 import tempfile
 import json
+import multiprocessing
 
 from retry import retry as _retry
 import click
@@ -110,16 +111,19 @@ def _helm(*args):
 
 def helm_install(name):
     if name in _helm('ls', '--all', name):
-        print('already installed!')
+        log.info('helm chart already installed: %s', name)
         return
 
     with open(f'values/{name}.yaml', 'r') as f:
         template = jinja2.Template(f.read())
-    chart = f'stable/{name}'
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml') as values:
-        values.write(template.render(config=config))
-        values.flush()
+        values_content = template.render(config=config)
 
+    chart = f'stable/{name}'
+    log.info('Installing helm chart: %s', chart)
+    t0 = time.time()
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml') as values:
+        values.write(values_content)
+        values.flush()
         args = [
             'upgrade',
             name, chart,
@@ -130,6 +134,7 @@ def helm_install(name):
             '--values', values.name,
         ]
         _helm(*args)
+    log.info('%s installed successfully after %s seconds', chart, int(time.time() - t0))
 
 
 def _kubectl(*args):
@@ -184,8 +189,9 @@ def init_server():
 
 @cli.command()
 def install_charts():
-    for chart in config.CHARTS:
-        helm_install(chart)
+    log.info("Installing helm charts...")
+    with multiprocessing.Pool(len(config.CHARTS)) as pool:
+        pool.map(helm_install, config.CHARTS)
 
 
 @cli.command()

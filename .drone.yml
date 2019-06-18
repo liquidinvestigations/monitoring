@@ -26,6 +26,7 @@ steps:
   - apk add bash > /dev/null
   - cp examples/config.env .
   - ./examples/docker.sh
+  - docker logs -f monitoring &
   - docker exec monitoring ./m.py wait-for-healthchecks 600
 
 services:
