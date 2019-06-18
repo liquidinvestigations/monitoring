@@ -93,7 +93,7 @@ email:
 service:
   name: sentry
   type: LoadBalancer
-  externalPort: 9000
+  externalPort: {{ config.SENTRY_HTTP_PORT }}
   internalPort: 9000
 
   ## Service annotations

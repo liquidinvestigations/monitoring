@@ -771,8 +771,8 @@ server:
 
     loadBalancerIP: ""
     loadBalancerSourceRanges: []
-    servicePort: 80
-    type: ClusterIP
+    servicePort: {{ config.PROMETHEUS_HTTP_PORT }}
+    type: LoadBalancer
 
   ## Prometheus server pod termination grace period
   ##
@@ -979,6 +979,20 @@ serverFiles:
         static_configs:
           - targets:
             - localhost:9090
+
+    scrape_configs:
+      - job_name: 'nomad_metrics'
+        consul_sd_configs:
+          - server: '{{ config.CONSUL_URL }}'
+            services: ['nomad-client', 'nomad']
+        relabel_configs:
+          - source_labels: ['__meta_consul_tags']
+            regex: '(.*)http(.*)'
+            action: keep
+        scrape_interval: 5s
+        metrics_path: /v1/metrics
+        params:
+          format: ['prometheus']
 
       # A scrape configuration for running Prometheus on a Kubernetes cluster.
       # This uses separate scrape configs for cluster components (i.e. API server, node)

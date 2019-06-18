@@ -61,12 +61,14 @@ Configs about your already-running Nomad and Consul servers:
 
 - `NOMAD_URL`
 - `CONSUL_URL`
+- `ADDR`
 
 
-Configs about what ports to listen on:
+Configs about how to deploy the services:
 
 - `K3S_HTTPS_PORT`, defaults 6443
+- `K3S_HTTP_PORT`, defaults 6480
 - `SENTRY_HTTP_PORT`, defaults 6643
 - `TELEGRAF_HTTP_PORT`, defaults 6463
 - `GRAFANA_HTTP_PORT`, defaults 6663
-- `PROMETHEUS_HTTP_PORT`, defaults 6446
+- `PROMETHEUS_PORT`, defaults 6446

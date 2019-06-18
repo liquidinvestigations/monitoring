@@ -10,7 +10,7 @@ serviceAccount:
 
 replicas: 1
 
-deploymentStrategy: RollingUpdate
+#deploymentStrategy: RollingUpdate
 
 readinessProbe:
   httpGet:
@@ -32,7 +32,7 @@ livenessProbe:
 
 image:
   repository: grafana/grafana
-  tag: 6.2.4
+  tag: 6.2.2
   pullPolicy: IfNotPresent
 
   ## Optionally specify an array of imagePullSecrets.
@@ -83,7 +83,7 @@ downloadDashboardsImage:
 ##
 service:
   type: LoadBalancer
-  port: 80
+  port: {{ config.GRAFANA_HTTP_PORT }}
   targetPort: 3000
     # targetPort: 4181 To be used with a proxy extraContainer
   annotations: {}
@@ -149,8 +149,8 @@ extraContainers: |
 ## ref: http://kubernetes.io/docs/user-guide/persistent-volumes/
 ##
 persistence:
-  enabled: false
-  # storageClassName: default
+  enabled: true
+  storageClassName: local-path
   accessModes:
     - ReadWriteOnce
   size: 10Gi
@@ -230,22 +230,22 @@ extraVolumeMounts: []
 
 ## Pass the plugins you want installed as a list.
 ##
-plugins: []
-  # - digrich-bubblechart-panel
-  # - grafana-clock-panel
+plugins:
+   - digrich-bubblechart-panel
+   - grafana-clock-panel
 
 ## Configure grafana datasources
 ## ref: http://docs.grafana.org/administration/provisioning/#datasources
 ##
-datasources: {}
-#  datasources.yaml:
-#    apiVersion: 1
-#    datasources:
-#    - name: Prometheus
-#      type: prometheus
-#      url: http://prometheus-prometheus-server
-#      access: proxy
-#      isDefault: true
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      url: "http://{{ config.ADDR }}:{{ config.PROMETHEUS_HTTP_PORT }}"
+      access: direct
+      isDefault: true
 
 ## Configure notifiers
 ## ref: http://docs.grafana.org/administration/provisioning/#alert-notification-channels
@@ -270,18 +270,18 @@ notifiers: {}
 ##
 ## `path` must be /var/lib/grafana/dashboards/<provider_name>
 ##
-dashboardProviders: {}
-#  dashboardproviders.yaml:
-#    apiVersion: 1
-#    providers:
-#    - name: 'default'
-#      orgId: 1
-#      folder: ''
-#      type: file
-#      disableDeletion: false
-#      editable: true
-#      options:
-#        path: /var/lib/grafana/dashboards/default
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+    - name: 'default'
+      orgId: 1
+      folder: ''
+      type: file
+      disableDeletion: false
+      editable: true
+      options:
+        path: /var/lib/grafana/dashboards/default
 
 ## Configure grafana dashboard to import
 ## NOTE: To use dashboards you must also enable/configure dashboardProviders
@@ -289,22 +289,10 @@ dashboardProviders: {}
 ##
 ## dashboards per provider, use provider name as key.
 ##
-dashboards: {}
-  # default:
-  #   some-dashboard:
-  #     json: |
-  #       $RAW_JSON
-  #   custom-dashboard:
-  #     file: dashboards/custom-dashboard.json
-  #   prometheus-stats:
-  #     gnetId: 2
-  #     revision: 2
-  #     datasource: Prometheus
-  #   local-dashboard:
-  #     url: https://example.com/repository/test.json
-  #   local-dashboard-base64:
-  #     url: https://example.com/repository/test-b64.json
-  #     b64content: true
+dashboards:
+  default:
+    nomad-prometheus:
+      url: https://raw.githubusercontent.com/hashicorp/nomad/41084f6d700fb19abc4d0850c98680186840deb5/integrations/grafana_dashboards/sample_grafana_dashboard.json
 
 ## Reference to external ConfigMap per provider. Use provider name as key and ConfiMap name as value.
 ## A provider dashboards must be defined either by external ConfigMaps or in values.yaml, not in both.

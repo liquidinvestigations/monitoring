@@ -4,6 +4,8 @@ import time
 import logging
 import subprocess
 import tempfile
+import json
+import sys
 
 from retry import retry as _retry
 import click
@@ -12,7 +14,7 @@ import jinja2
 
 log = logging.getLogger(__name__)
 click_log.basic_config(log)
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 
 
 class Config():
@@ -23,20 +25,25 @@ class Config():
         self.K3S_HTTP_PORT = os.environ.get('K3S_HTTP_PORT', 6480)
         self.K3S_HTTPS_PORT = os.environ.get('K3S_HTTPS_PORT', 6443)
         self.SENTRY_HTTP_PORT = os.environ.get('SENTRY_HTTP_PORT', 6643)
-        self.TELEGRAF_HTTP_PORT = os.environ.get('TELEGRAF_HTTP_PORT', 6463)
+        self.TELEGRAF_PORT = os.environ.get('TELEGRAF_PORT', 6463)
         self.GRAFANA_HTTP_PORT = os.environ.get('GRAFANA_HTTP_PORT', 6663)
         self.PROMETHEUS_HTTP_PORT = os.environ.get('PROMETHEUS_HTTP_PORT', 6446)
 
         self.DATA_DIR = '/data'
         self.KUBECONFIG = '/data/kubeconfig.yml'
 
-        self.CHARTS = ['sentry', 'telegraf', 'prometheus', 'grafana']
+        self.CHARTS = ['telegraf', 'prometheus', 'grafana', 'sentry']
+        self.HELM_TIMEOUT = 333
+        self.ADDR = subprocess.check_output("ip route get 8.8.8.8 | awk '{ print $7; exit }'",
+                                            shell=True)
+        self.DEBUG = os.environ.get('DEBUG')
 
 
 config = Config()
 
+
 def retry(exc):
-    return _retry(exc, tries=7, delay=5, backoff=1.3, jitter=(1,3), logger=log)
+    return _retry(exc, tries=7, delay=5, backoff=1.3, jitter=(3, 5), logger=log)
 
 
 def execve(args):
@@ -50,7 +57,7 @@ def run(args, **kwargs):
     log.debug("+ %s", " ".join(args))
     t0 = time.time()
     ret = subprocess.check_output(args, **kwargs).decode('latin1')
-    dt = int((time.time() - t0)*1000)
+    dt = int((time.time() - t0) * 1000)
     log.debug("... after %s ms:\n%s", dt, ret)
     return ret
 
@@ -58,11 +65,6 @@ def run(args, **kwargs):
 @click.group()
 def cli():
     pass
-
-
-@cli.command()
-def healthcheck():
-    raise NotImplemented()
 
 
 def k3s_server_args():
@@ -76,12 +78,15 @@ def k3s_server_args():
         '--log', config.DATA_DIR + '/k3s/server.log',
         '--write-kubeconfig', config.KUBECONFIG,
         '--no-deploy=traefik',
-        #'--node-name', 'monitoring',  # this checks with DNS and crashes our server :(
+        # '--node-name', 'monitoring', this checks with DNS and crashes our server :(
     ]
 
 
 def helm_args():
-    return ["/bin/helm", "--kubeconfig", config.KUBECONFIG]
+    args = ["/bin/helm", "--kubeconfig", config.KUBECONFIG]
+    if config.DEBUG:
+        args += ['--debug']
+    return args
 
 
 def kubectl_args():
@@ -105,10 +110,8 @@ def _helm(*args):
 
 
 def helm_install(name):
-    if name in _helm('ls', '--deployed', '-q', name):
-        log.info('Already deployed: %s', name)
-    elif name in _helm('ls', '--all', '-q', name):
-        log.error('Past deployment failure!')
+    if name in _helm('ls', '--all', name):
+        print('already installed!')
         return
 
     with open(f'values/{name}.yaml', 'r') as f:
@@ -118,7 +121,15 @@ def helm_install(name):
         values.write(template.render(config=config))
         values.flush()
 
-        args = ['install', '--dep-up', '--atomic', '-f', values.name, '-n', name, chart]
+        args = [
+            'upgrade',
+            name, chart,
+            '--install',
+            '--force',
+            '--namespace', 'kube-system',
+            '--atomic',
+            '--values', values.name,
+        ]
         _helm(*args)
 
 
@@ -128,53 +139,91 @@ def _kubectl(*args):
 
 @retry(subprocess.CalledProcessError)
 def wait_for_k3s():
+    log.info("Waiting for k3s to become available...")
     _kubectl('get', 'node')
 
 
 @retry(subprocess.CalledProcessError)
 def wait_for_helm():
+    log.info("Waiting for helm to become available...")
     _helm('install', '--dep-up', '--dry-run', 'stable/sentry')
-
-
-def server_init():
-    # setup k3s pvc
-    log.info("Setting up local path storage PVC")
-    _kubectl('apply', '-f', 'charts/local-path-storage.yaml')
-    _kubectl('patch', 'storageclass', 'local-path', '-p', K3S_LOCAL_STORAGE_PATCH)
-    if 'serviceaccount/tiller' not in _kubectl('get', 'serviceaccounts', '-A', '-o', 'name'):
-        log.info("Setting up serviceaccount for tiller")
-        _kubectl('create', 'serviceaccount', '--namespace', 'kube-system', 'tiller')
-        _kubectl('create', 'clusterrolebinding', 'tiller-cluster-rule',
-                 '--clusterrole=cluster-admin', '--serviceaccount=kube-system:tiller')
-
-    log.info("Installing and upgrading helm")
-    _helm('init', '--upgrade', '--history-max', 200, '--service-account', 'tiller')
-    _helm('repo', 'update')
-
-    wait_for_helm()
-
-    for chart in config.CHARTS:
-        helm_install(chart)
 
 
 K3S_LOCAL_STORAGE_PATCH = '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'  # noqa: E501
 
 
 @cli.command()
-def runserver():
-    log.info("Forking")
+def healthcheck():
+    resources = json.loads(_kubectl('get', '-A', 'all', '-o', 'json'))
+    log.info('kubernetes is up: %s resources', len(resources['items']))
+    log.info("Checking the helm releases...")
+    not_deployed = [name for name in config.CHARTS if name not in _helm('ls', '--deployed', name)]
+    if not_deployed:
+        log.error('Not deployed: %s', ' '.join(not_deployed))
+        raise RuntimeError('Not deployed: %s', ' '.join(not_deployed))
+    log.info('All are deployed.')
+
+
+@cli.command()
+def init_server():
+    wait_for_k3s()
+
+    log.info("Setting up local path storage PVC")
+    _kubectl('apply', '-f', 'charts/local-path-storage.yaml')
+    _kubectl('patch', 'storageclass', 'local-path', '-p', K3S_LOCAL_STORAGE_PATCH)
+
+    if 'serviceaccount/tiller' not in _kubectl('get', 'serviceaccounts', '-A', '-o', 'name'):
+        log.info("Setting up serviceaccount for tiller")
+        _kubectl('create', 'serviceaccount', '--namespace', 'kube-system', 'tiller')
+        _kubectl('create', 'clusterrolebinding', 'tiller-cluster-rule',
+                 '--clusterrole=cluster-admin', '--serviceaccount=kube-system:tiller')
+
+        log.info("Installing and upgrading helm")
+        _helm('init', '--upgrade', '--history-max', 200, '--service-account', 'tiller')
+        _helm('repo', 'update')
+
+    wait_for_helm()
+
+
+@cli.command()
+def install_charts():
+    for chart in config.CHARTS:
+        helm_install(chart)
+
+
+@cli.command()
+@click.argument('timeout', type=float, default=500)
+@click.pass_context
+def wait_for_healthchecks(ctx, timeout):
+    t0 = time.time()
+    while time.time() < t0 + timeout:
+        time.sleep(5)
+        dt = int(time.time() - t0)
+        try:
+            ctx.invoke(healthcheck)
+            log.info("All up after %s seconds!", dt)
+            return
+        except RuntimeError as e:
+            pass
+    log.info("Services failed to be deployed after %s seconds", dt)
+
+
+
+@cli.command()
+@click.pass_context
+def runserver(ctx):
+    log.info("Starting server...")
     if os.fork() == 0:
         execve(k3s_server_args())
 
-    # wait until `kubectl get node` works
-    wait_for_k3s()
+    ctx.invoke(init_server)
+    ctx.invoke(install_charts)
 
-    server_init()
-
-    log.info('We are set! Sleeping forever')
+    log.info('We are set!')
     while True:
-        _kubectl('get', '-A', 'all')
-        time.sleep(15)
+        time.sleep(10)
+        ctx.invoke(healthcheck)
+
 
 if __name__ == '__main__':
     cli()
