@@ -17,15 +17,16 @@ steps:
   - sleep 5; until docker version; do sleep 5; done
   - docker build . --tag liquidinvestigations/monitoring
 
-- name: deploy servers and wait for healthcheck
+- name: deploy, wait healthchecks
   image: docker:dind
   volumes:
   - name: dockersock
     path: /var/run
   commands:
-  - cp examples/monitoring.env .
+  - apk add bash > /dev/null
+  - cp examples/config.env .
   - ./examples/docker.sh
-  - docker exec ./m.py wait-for-healthchecks 600
+  - docker exec monitoring ./m.py wait-for-healthchecks 600
 
 services:
 - name: docker daemon in docker

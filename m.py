@@ -5,7 +5,6 @@ import logging
 import subprocess
 import tempfile
 import json
-import sys
 
 from retry import retry as _retry
 import click
@@ -156,11 +155,9 @@ K3S_LOCAL_STORAGE_PATCH = '{"metadata":{"annotations":{"storageclass.kubernetes.
 def healthcheck():
     resources = json.loads(_kubectl('get', '-A', 'all', '-o', 'json'))
     log.info('kubernetes is up: %s resources', len(resources['items']))
-    log.info("Checking the helm releases...")
     not_deployed = [name for name in config.CHARTS if name not in _helm('ls', '--deployed', name)]
     if not_deployed:
-        log.error('Not deployed: %s', ' '.join(not_deployed))
-        raise RuntimeError('Not deployed: %s', ' '.join(not_deployed))
+        raise RuntimeError('Not deployed: ' + ', '.join(not_deployed))
     log.info('All are deployed.')
 
 
@@ -197,16 +194,15 @@ def install_charts():
 def wait_for_healthchecks(ctx, timeout):
     t0 = time.time()
     while time.time() < t0 + timeout:
-        time.sleep(5)
+        time.sleep(22)
         dt = int(time.time() - t0)
         try:
             ctx.invoke(healthcheck)
             log.info("All up after %s seconds!", dt)
             return
-        except RuntimeError as e:
-            pass
+        except (RuntimeError, subprocess.CalledProcessError) as e:
+            log.warning(e)
     log.info("Services failed to be deployed after %s seconds", dt)
-
 
 
 @cli.command()
