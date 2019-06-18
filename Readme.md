@@ -41,13 +41,16 @@ docker run
   liquidinvestigations/monitoring
 ```
 
-You can get all sorts of secrets back from the deployment by running scripts in the container:
+You can get all sorts of stats and secrets back from the deployment by running
+scripts in the container:
 
 ```bash
-docker exec monitoring healthcheck
-docker exec monitoring getkubeconfig
-docker exec monitoring sentry getdsn project1
-docker exec monitoring shell
+docker exec ./m.py healthcheck             # Checks that k3s and all helms are up
+docker exec ./m.py kubectl get all         # Runs kubectl
+docker exec ./m.py kubectl helm ls --all   # Runs helm
+docker exec ./m.py sentry getdsn project1  # TODO - create sentry project
+docker exec ./m.py getsecret sentry-admin  # TODO - get single specific secret from k3s
+docker exec -it ./m.py bash
 ```
 
 ## Configuration
